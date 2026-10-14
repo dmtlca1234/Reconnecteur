@@ -183,12 +183,23 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
         annuler_confirmation()
         it["reconnecter"].Enabled = False
         etat["plan"] = None
-        arbre.Clear()
+        vider_arbre()
         it["bilan"].Text = ""
 
+    def vider_arbre():
+        """Vide la liste ET oublie ses lignes : une ligne effacée ne doit plus jamais être relue."""
+        memoriser_coches()
+        arbre.Clear()
+        etat["items"] = {}
+
     def memoriser_coches():
-        for cle, item in etat["items"].items():
-            etat["coches"][cle] = item.CheckState[0] == "Checked"
+        for cle, item in list(etat["items"].items()):
+            try:
+                coche = item.CheckState[0]
+            except (TypeError, AttributeError):  # ligne déjà effacée par Resolve
+                continue
+            if coche is not None:
+                etat["coches"][cle] = coche == "Checked"
 
     def selection() -> List[Tuple[str, str]]:
         memoriser_coches()
@@ -207,8 +218,7 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
     def remplir_arbre():
         plan = etat["plan"]
         memoriser_coches()
-        arbre.Clear()
-        etat["items"] = {}
+        vider_arbre()
         if plan is None:
             return
         montrer = {True: bool(it["voir_rapide"].Checked), False: bool(it["voir_lent"].Checked)}
@@ -281,8 +291,7 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
               for vol, (t, h) in sorted(plan.hors_racines.items())])
 
     def afficher_resultat(plan, r):
-        arbre.Clear()
-        etat["items"] = {}
+        vider_arbre()
         par_ligne: Dict[Tuple[str, str], List[int]] = {}
         for a in r.reussis:
             par_ligne.setdefault((a.groupe, a.sens), [0, 0])[0] += 1
@@ -328,7 +337,7 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
         projet = resolve_io.projet_courant(resolve)
         etat["projet"] = projet
         it["titre"].Text = f"<b>Projet :</b> {projet.GetName()}"
-        arbre.Clear()
+        vider_arbre()
         it["bilan"].Text = ""
         dire("Lecture du média pool…")
         plan = moteur.analyser(resolve, projet, r, dire)

@@ -1,5 +1,5 @@
 """Test de la vraie fenêtre dans Resolve, clics simulés (QueueEvent) :
-ouverture → analyse auto → Tout décocher → Tout cocher → filtre → Reconnecter → Confirmer → Fermer ;
+ouverture → analyse auto ×3 → Tout décocher → Tout cocher → filtre → Reconnecter → Confirmer → Fermer ;
 vérifie les noms de disques (bilan, bouton de confirmation, flèches) ; puis réouverture (pas de fenêtre fantôme)."""
 import os
 import sys
@@ -24,8 +24,11 @@ def items():
 def analyser_espion(*a, **k):
     plan = vrai_analyser(*a, **k)
     journal.setdefault("analyses", []).append(len(plan.actions))
-    if len(journal["analyses"]) == 1:   # après la 1re analyse : les nouveaux contrôles, puis Reconnecter ×2
-        it = items()
+    it = items()
+    if len(journal["analyses"]) < 3:    # ré-analyses successives (bug corrigé le 2026-10-14 : lignes effacées relues)
+        ui.QueueEvent(it["voir_lent"], "Clicked", {})
+        ui.QueueEvent(it["analyser"], "Clicked", {})
+    elif len(journal["analyses"]) == 3:  # puis les contrôles, et Reconnecter ×2
         for bouton in ("rien", "tout", "voir_lent", "reconnecter", "reconnecter"):
             ui.QueueEvent(it[bouton], "Clicked", {})
     return plan
