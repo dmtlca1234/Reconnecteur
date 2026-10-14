@@ -1,12 +1,12 @@
 # Reconnecteur
 
-Deux outils qui gardent tes médias connectés quand tu les déplaces entre des **disques rapides** (SSD,
+Garde tes médias DaVinci Resolve connectés quand tu les déplaces entre des **disques rapides** (SSD,
 projets en cours) et des **disques lents** (archives).
 
-**Aucun fichier n'est jamais copié, déplacé ni effacé** : les outils changent seulement l'endroit où le logiciel va lire le fichier.
+**Aucun fichier n'est jamais copié, déplacé ni effacé** : l'app change seulement l'endroit où Resolve va lire le fichier.
 
-**La règle :** si un fichier est sur un disque rapide, le logiciel le lit là. S'il n'y est plus (tu l'as
-archivé puis effacé du SSD), il le lit sur un disque lent. Dans DaVinci, un clip déjà relié à un disque
+**La règle :** si un fichier est sur un disque rapide, Resolve le lit là. S'il n'y est plus (tu l'as
+archivé puis effacé du SSD), il le lit sur un disque lent. Un clip déjà relié à un disque
 rapide où son fichier existe ne bouge jamais.
 
 ---
@@ -47,24 +47,6 @@ rapide où son fichier existe ne bouge jamais.
 
 ---
 
-## Lightroom Classic — le plugin « Reconnexion 4tb / 12tb »
-
-Il est réglé pour tes disques (`Belvoir_DO–4tb` et `Belvoir_DO_12tb`). Les chemins sont en haut de
-`reconnecter_photos.py` si tu dois les changer.
-
-- **Automatique :** quand tu quittes Lightroom, un écran montre ce qui va être reconnecté. Quelques
-  secondes après la fermeture, une fenêtre confirme ce qui a été fait.
-- **Aperçu sans rien changer :** Bibliothèque → Modules externes → *Vérifier les dossiers 4tb / 12tb…*
-- **À la main :** double-clic sur `Reconnecter photos Lightroom.command` (Lightroom fermé).
-- Une sauvegarde du catalogue est faite avant chaque modification (5 dernières gardées).
-
-### Installer le plugin sur un autre Mac
-Copie `Lightroom/ReconnexionDisques.lrplugin` dans
-`~/Library/Application Support/Adobe/Lightroom/Modules/`, puis redémarre Lightroom.
-
----
-
 ## Si quelque chose ne va pas
-- **DaVinci :** bouton *Journal*, ou le fichier `~/Library/Application Support/Reconnecteur/erreurs.log`.
-- **Lightroom :** `~/Library/Logs/lightroom_reconnexion.log` et `6. Lightroom/Journal Lightroom.md`.
+- Bouton *Journal*, ou le fichier `~/Library/Application Support/Reconnecteur/erreurs.log`.
 - Demande à une IA en lui donnant le fichier **`POUR-UNE-IA.md`**.

@@ -1,3 +1,6 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Volet Lightroom : gardé en local, non publié
+Lightroom/

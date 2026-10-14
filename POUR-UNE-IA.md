@@ -1,7 +1,7 @@
 # Reconnecteur — fiche technique pour une IA
 
 Lis ce fichier en entier avant de modifier quoi que ce soit. Les comportements de l'API listés ici ont été
-**vérifiés empiriquement** (DaVinci Resolve Studio 21.1, Lightroom Classic 15.5, macOS 15, 2026-10-09).
+**vérifiés empiriquement** (DaVinci Resolve Studio 21.1, macOS 15, 2026-10-09).
 Ne les « corrige » pas d'après ta mémoire de l'API.
 
 ## Garantie absolue (exigence de l'utilisateur)
@@ -27,14 +27,6 @@ lisible, un candidat de taille différente est rejeté. Un clip hors ligne point
 aussi recherché. Garde-fou : premier rapide indisponible → `BLOQUE`. Config v1.0 (`rapide`/`lent`) migrée
 automatiquement par `config.charger`. Vérifié sur le vrai projet (2026-10-14) : 1 548 correspondances, toutes de
 taille identique (1 177 même chemin, 371 retrouvées par nom).
-
-## Règle Lightroom
-Deux racines de même arborescence : **rapide** (SSD) et **lent** (archives, HDD, parfois débranché).
-Pour chaque média : présent sous rapide → connecté au rapide ; sinon présent sous lent → connecté au lent ;
-sinon introuvable. Garde-fou : **si la racine rapide n'est pas réellement montée, ne rien proposer**
-(sinon tout basculerait vers le lent). « Monté » = `os.path.ismount("/Volumes/<Vol>")`, jamais `isdir`
-(macOS peut laisser un dossier résiduel dans /Volumes). L'utilisateur archive en copiant vers le lent,
-puis en effaçant du rapide ; en déplacement, seul le rapide est branché.
 
 ## DaVinci/ — application « Reconnecteur » (Python, 3.9 → 3.14)
 ```
@@ -87,27 +79,6 @@ Lancer les tests : `cd DaVinci && python3 -m unittest discover -s tests` puis
 - `script` est un **mot réservé** : ne jamais l'utiliser comme nom de variable (bug réel rencontré).
 - `do shell script` attend la fin du processus : lancer la fenêtre en arrière-plan (`nohup … &`).
 - Le nom du volume contient un tiret demi-cadratin U+2013 (`Belvoir_DO–4tb`) : toujours `quoted form of`.
-
-## Lightroom/ — plugin + script (Belvoir uniquement : chemins codés en haut de reconnecter_photos.py)
-- `reconnecter_photos.py` modifie directement le catalogue SQLite `.lrcat` **Lightroom fermé**
-  (`pgrep -x "Adobe Lightroom Classic"` + fichier `.lrcat.lock`). Options `--verifier` (lecture d'une copie
-  temporaire, marche Lightroom ouvert), `--oui`, `--catalog`.
-- Modèle : `AgLibraryRootFolder(id_local, id_global, absolutePath, name)` ; `AgLibraryFolder(rootFolder,
-  pathFromRoot)` avec index UNIQUE (rootFolder, pathFromRoot) ; `parentId` inutilisé (NULL). Reconnecter un
-  dossier = changer son `rootFolder` vers la racine de l'autre disque (créée au besoin, id tiré de
-  `Adobe_variablesTable.Adobe_entityIDCounter` qu'on incrémente ensuite).
-- Granularité **dossier** : un dossier n'est connecté au rapide que s'il y est **complet** (tous ses
-  fichiers), sinon au lent s'il y est complet.
-- **Ne jamais** repointer `AgLibraryRootFolder.absolutePath` de la racine du 4tb vers le 12tb (c'est ce
-  qu'avait fait un « Rechercher le dossier manquant » sur la racine : tout le catalogue lisait le disque lent).
-- Sauvegarde par `sqlite3.Connection.backup` (inclut le WAL), `pragma integrity_check` après commit,
-  restauration automatique si ≠ ok. Verrou `fcntl` dans /tmp.
-- `ReconnexionDisques.lrplugin` : `LrShutdownApp` → aperçu (`--verifier`) affiché avant de quitter s'il y a
-  quelque chose à faire, puis lance `apres_fermeture.sh` en `nohup` qui attend la fin de Lightroom et le
-  déverrouillage du catalogue **actif** (le plus récent ; un vieux `.lrcat.lock` abandonné existait), lance
-  `--oui` et affiche le résultat (`osascript display alert`, texte passé en argv). Menu Bibliothèque →
-  Modules externes → Vérifier. Installé par copie dans `~/Library/Application Support/Adobe/Lightroom/Modules/`.
-- LaunchAgent : refusé par l'utilisateur (ne veut rien en arrière-plan) — ne pas en réintroduire.
 
 ## Préférences de l'utilisateur
 - Interface et messages **en français**, simples, sans jargon ; il veut voir ce qui va être fait avant, et un
