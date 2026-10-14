@@ -16,17 +16,21 @@ côté et flèche ◀/▶ ; filtres par direction ; barre de bilan `◀ N clips 
 qui nomme les disques. Ne pas laisser la fenêtre ouverte pendant un test : Resolve n'exécute qu'un script à la fois
 (une fenêtre ouverte via le menu bloque le scripting externe).
 
-## Règle métier DaVinci (v1.1 : plusieurs disques)
-Racines choisies par l'utilisateur : `rapides` (liste ordonnée par priorité) et `lents` (archives). Pour chaque
-clip (`regles.decider`) : relié à un rapide où le fichier existe → ne bouge pas (« garder le lien actuel ») ;
-sinon chercher sur les rapides puis les lents (`regles.chercher`) : 1) même chemin relatif, 2) index par nom
-(`regles.Index`, os.walk paresseux) départagé par `score_parents` = nombre de dossiers parents DISTINCTIFS
-identiques (les dossiers génériques de cartes — DCIM, 100MSDCF, CLIP, M4ROOT, A001… — `est_generique` — ne
-comptent pas) ; score 0 → jamais relié ; égalité → `AMBIGU` (on ne touche à rien) ; si le fichier actuel est
-lisible, un candidat de taille différente est rejeté. Un clip hors ligne pointant vers un disque non choisi est
-aussi recherché. Garde-fou : premier rapide indisponible → `BLOQUE`. Config v1.0 (`rapide`/`lent`) migrée
-automatiquement par `config.charger`. Vérifié sur le vrai projet (2026-10-14) : 1 548 correspondances, toutes de
-taille identique (1 177 même chemin, 371 retrouvées par nom).
+## Règle métier DaVinci (v1.2 : paires + validation nom/date/taille)
+Config : `paires` = liste ordonnée de {rapide, lent} (`regles.Racines`/`regles.Paire`), comme les paires de dossiers de
+FreeFileSync ; chaque archive a le même rangement que son dossier rapide. `regles.decider` : clip sur le rapide et
+fichier présent → ne bouge pas ; sinon cible = **jumeau + même chemin relatif**, jamais une autre paire (un clip ne
+peut pas changer de paire : c'est ce qui empêche de relier un tournage au disque d'un autre client). Validation
+`regles.identique` : même nom (même chemin), même date de modification (±2 s, `TOLERANCE_DATE`, exFAT) et, si
+l'original est lisible, même taille ; original hors ligne → date comparée à `Date Modified` de Resolve
+(`lire_date_resolve` ; vérifié = mtime du fichier pour 9 056 clips sur 9 057). Écart → `DIFFERENT` (non touché).
+Clip HORS LIGNE pointant hors des paires → `chercher_ailleurs` : même nom + même date dans les dossiers choisis
+(rapides d'abord) ; sans date, exige un dossier parent distinctif (`score_parents`, dossiers de carte ignorés par
+`est_generique`) ; plusieurs fichiers différents → `AMBIGU`. Garde-fou : rapide de la 1re paire indisponible → `BLOQUE`.
+Config 1.0/1.1 migrée en paires (zip rapides/lents) par `config.charger`.
+Vérifié sur le vrai projet (2026-10-14) : 1 177 reconnexions, toutes « nom, date et taille identiques », et contrôle
+indépendant par empreinte de contenu (début/milieu/fin, 207 s) : 1 177/1 177 identiques. Le modèle « liste de disques »
+de la v1.1 avait relié des tournages non-mariage au disque d'un mariage (copies parasites) : ne pas y revenir.
 
 ## DaVinci/ — application « Reconnecteur » (Python, 3.9 → 3.14)
 ```
@@ -41,7 +45,7 @@ reconnecteur/__main__.py   CLI : --analyser | --appliquer [--rapide P --lent P -
 Reconnecteur.py            lanceur (menu Resolve Workspace→Scripts ET terminal) ; recharge les modules à chaque lancement
 dock/Reconnecteur.applescript  icône du Dock : lance ResolvePython Reconnecteur.py en arrière-plan (nohup)
 Installer.command          copie vers ~/Library/Application Support/Reconnecteur/app + menu Resolve + ~/Applications/Reconnecteur.app
-tests/test_reconnecteur.py unittest avec tests/faux_resolve.py (fidèle aux comportements ci-dessous) — 37 tests
+tests/test_reconnecteur.py unittest avec tests/faux_resolve.py (fidèle aux comportements ci-dessous) — 37 tests (paires, identité, isolation entre paires, garantie)
 tests/banc_resolve.py      intégration sur le VRAI Resolve : crée des médias ffmpeg + un projet jetable « ZZ Test Reconnecteur (temporaire) », puis le supprime
 tests/fenetre_resolve.py   vraie fenêtre, clics simulés par ui.QueueEvent
 ```

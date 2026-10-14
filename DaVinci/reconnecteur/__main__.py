@@ -3,8 +3,8 @@
   ResolvePython -m reconnecteur                 ouvre la fenêtre dans Resolve
   ResolvePython -m reconnecteur --analyser      rapport dans le terminal, aucune modification
   ResolvePython -m reconnecteur --appliquer     reconnecte tout, sans fenêtre (avec copie de sécurité)
-  options : --rapide CHEMIN (répétable, par priorité) --lent CHEMIN (répétable) — sinon les disques
-            enregistrés ; --sans-sauvegarde
+  options : --paire RAPIDE ARCHIVE (répétable, par priorité) — sinon les paires enregistrées ;
+            --sans-sauvegarde
 """
 from __future__ import annotations
 
@@ -19,8 +19,7 @@ def principal(argv=None, resolve=None, fusion=None, bmd=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--analyser", action="store_true")
     ap.add_argument("--appliquer", action="store_true")
-    ap.add_argument("--rapide", action="append")
-    ap.add_argument("--lent", action="append")
+    ap.add_argument("--paire", nargs=2, action="append", metavar=("RAPIDE", "ARCHIVE"))
     ap.add_argument("--sans-sauvegarde", action="store_true")
     ap.add_argument("--version", action="version", version=f"Reconnecteur {VERSION}")
     args = ap.parse_args(argv)
@@ -29,9 +28,9 @@ def principal(argv=None, resolve=None, fusion=None, bmd=None) -> int:
         fenetre.ouvrir(resolve, fusion, bmd)
         return 0
     reglages = config.charger()
-    racines = regles.Racines.depuis(args.rapide or reglages["rapides"], args.lent or reglages["lents"])
-    if not racines.rapides:
-        print("Aucun disque configuré : ouvre la fenêtre une première fois, ou passe --rapide (et --lent).")
+    racines = regles.Racines.depuis(args.paire or reglages["paires"])
+    if not racines.paires:
+        print("Aucune paire configurée : ouvre la fenêtre une première fois, ou passe --paire RAPIDE ARCHIVE.")
         return 2
     if racines.probleme():
         print("⚠ " + racines.probleme())

@@ -10,7 +10,7 @@ import banc_resolve  # noqa: E402  (fixe RECONNECTEUR_DOSSIER sur un dossier tem
 from reconnecteur import config, fenetre, moteur, regles  # noqa: E402
 
 resolve, projet, R, L, base = banc_resolve.preparer()
-config.enregistrer({"rapides": [R], "lents": [L], "sauvegarde_avant": True})
+config.enregistrer({"paires": [{"rapide": R, "lent": L}], "sauvegarde_avant": True})
 ui = resolve.Fusion().UIManager
 journal = {}
 vrai_analyser, vrai_reconnecter = moteur.analyser, moteur.reconnecter

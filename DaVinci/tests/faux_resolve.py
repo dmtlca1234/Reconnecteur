@@ -3,17 +3,26 @@
 - les sous-titres sont refusés ;
 - LinkProxyMedia relie le proxy si le fichier existe ;
 - les uid sont stables."""
+import datetime
 import itertools
 import os
 
 _ids = itertools.count(1)
 
 
+def date_resolve(chemin):
+    """Date Modified au format de Resolve (« Fri Aug  7 15:58:29 2026 »), comme Resolve la mémorise à l'import."""
+    try:
+        return datetime.datetime.fromtimestamp(os.stat(chemin).st_mtime).strftime("%a %b %e %H:%M:%S %Y")
+    except OSError:
+        return ""
+
+
 class Clip:
     def __init__(self, chemin, type_="Video + Audio", proxy=""):
         self.uid = f"uid-{next(_ids):04d}"
         self.props = {"File Path": chemin, "Proxy Media Path": proxy, "Type": type_,
-                      "Clip Name": os.path.basename(chemin)}
+                      "Clip Name": os.path.basename(chemin), "Date Modified": date_resolve(chemin)}
 
     def GetUniqueId(self):
         return self.uid

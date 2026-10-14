@@ -55,30 +55,41 @@ def nom_disque(racine: str) -> str:
     return os.path.basename(racine.rstrip("/")) or "Mac"
 
 
-def _liste(valeur) -> List[str]:
-    if not valeur:
-        return []
-    if isinstance(valeur, str):
-        valeur = [valeur]
-    vus: List[str] = []
-    for v in valeur:
-        if v and v.strip():
-            r = racine_normalisee(v)
-            if r not in vus:
-                vus.append(r)
-    return vus
+@dataclass(frozen=True)
+class Paire:
+    """Un dossier rapide et SON archive : même rangement des deux côtés (comme une paire FreeFileSync)."""
+    rapide: str
+    lent: str
 
 
 @dataclass(frozen=True)
 class Racines:
-    """Les disques (dossiers racines) où peuvent se trouver les médias.
-    rapides : par ordre de priorité ; lents : archives, utilisés en dernier recours."""
-    rapides: Tuple[str, ...]
-    lents: Tuple[str, ...] = ()
+    """Les paires de dossiers choisies, par ordre de priorité.
+    Un clip ne passe jamais que d'un dossier à son jumeau, au même chemin relatif."""
+    paires: Tuple[Paire, ...]
 
     @staticmethod
-    def depuis(rapides, lents=()) -> "Racines":
-        return Racines(tuple(_liste(rapides)), tuple(_liste(lents)))
+    def depuis(paires) -> "Racines":
+        """paires : liste de (rapide, lent), de dicts {"rapide", "lent"} ou de Paire."""
+        out: List[Paire] = []
+        for x in paires or []:
+            if isinstance(x, Paire):
+                r, l = x.rapide, x.lent
+            elif isinstance(x, dict):
+                r, l = x.get("rapide", ""), x.get("lent", "")
+            else:
+                r, l = x
+            if r and r.strip() and l and l.strip():
+                out.append(Paire(racine_normalisee(r), racine_normalisee(l)))
+        return Racines(tuple(out))
+
+    @property
+    def rapides(self) -> Tuple[str, ...]:
+        return tuple(p.rapide for p in self.paires)
+
+    @property
+    def lents(self) -> Tuple[str, ...]:
+        return tuple(p.lent for p in self.paires)
 
     @property
     def toutes(self) -> Tuple[str, ...]:
@@ -86,18 +97,24 @@ class Racines:
 
     @property
     def principal(self) -> str:
-        return self.rapides[0] if self.rapides else ""
+        return self.paires[0].rapide if self.paires else ""
 
     def niveau(self, racine: str) -> str:
         return RAPIDE if racine in self.rapides else LENT
 
+    def paire_de(self, racine: str) -> Optional[Paire]:
+        for p in self.paires:
+            if racine in (p.rapide, p.lent):
+                return p
+        return None
+
     def probleme(self) -> Optional[str]:
         """Configuration invalide ? Retourne un message, sinon None."""
-        if not self.rapides:
-            return "Ajoute au moins un disque rapide."
+        if not self.paires:
+            return "Ajoute au moins une paire « dossier rapide ⇄ archive »."
         toutes = self.toutes
         if len(set(toutes)) != len(toutes):
-            return "Le même dossier est choisi deux fois."
+            return "Le même dossier est utilisé deux fois."
         for a in toutes:
             if a == "/":
                 return "Choisis des dossiers précis, pas la racine du Mac."
@@ -165,7 +182,7 @@ class Disque:
         self._exists = exists
         self._cache: Dict[str, Optional[frozenset]] = {}
         self._sous: Dict[str, int] = {}
-        self._tailles: Dict[str, Optional[int]] = {}
+        self._stats: Dict[str, Optional[Tuple[int, float]]] = {}
 
     def noms(self, dossier: str) -> Optional[frozenset]:
         d = nfc(dossier).rstrip("/") or "/"
@@ -185,17 +202,31 @@ class Disque:
                 self._sous[d] = 0
         return self._sous[d]
 
-    def taille(self, chemin: str) -> Optional[int]:
-        """Taille en octets (None si illisible ou séquence d'images)."""
-        c = nfc(chemin)
-        if _SEQ_CROCHETS.search(os.path.basename(c)) or _SEQ_PRINTF.search(os.path.basename(c)):
+    def stat(self, chemin: Optional[str]) -> Optional[Tuple[int, float]]:
+        """(taille en octets, date de modification) ; pour une séquence, ceux de la première image."""
+        if not chemin:
             return None
-        if c not in self._tailles:
+        c = nfc(chemin)
+        dossier, nom = os.path.split(c)
+        m = _SEQ_PRINTF.search(nom)
+        if m:  # « frame_%04d.dpx » : la première image présente dans le dossier
+            motif = re.compile(re.escape(nom[:m.start()]) + r"\d+" + re.escape(nom[m.end():]) + r"$")
+            images = sorted(n for n in (self.noms(dossier) or ()) if motif.match(n))
+            if not images:
+                return None
+            nom = images[0]
+        c = os.path.join(dossier, premiere_image(nom))
+        if c not in self._stats:
             try:
-                self._tailles[c] = os.stat(c).st_size
+                st = os.stat(c)
+                self._stats[c] = (st.st_size, st.st_mtime)
             except OSError:
-                self._tailles[c] = None
-        return self._tailles[c]
+                self._stats[c] = None
+        return self._stats[c]
+
+    def taille(self, chemin: str) -> Optional[int]:
+        st = self.stat(chemin)
+        return st[0] if st else None
 
     def existe(self, chemin: str) -> bool:
         c = nfc(chemin)
@@ -269,6 +300,32 @@ def score_parents(chemin_a: str, chemin_b: str) -> int:
     return distinctifs
 
 
+TOLERANCE_DATE = 2.0  # secondes (les disques exFAT/FAT arrondissent les dates à 2 s)
+
+
+def identique(cible: str, disque: "Disque", date_ref: Optional[float] = None,
+              source: Optional[str] = None) -> Tuple[bool, str]:
+    """Le fichier « cible » est-il le même fichier que celui du clip ? Validation rapide, sans lire le contenu :
+    même NOM (garanti par l'appelant), même DATE de modification et, si l'original est lisible, même TAILLE.
+    date_ref : la date de modification que Resolve a gardée en mémoire (marche même original hors ligne).
+    Retourne (identique, preuve ou motif du refus)."""
+    sc = disque.stat(cible)
+    if sc is None:
+        return False, "fichier cible illisible"
+    ss = disque.stat(source) if source else None
+    if ss is not None:
+        if ss[0] != sc[0]:
+            return False, f"taille différente ({nombre(ss[0])} ≠ {nombre(sc[0])} octets)"
+        if abs(ss[1] - sc[1]) > TOLERANCE_DATE:
+            return False, "date de modification différente"
+        return True, "nom, date et taille identiques"
+    if date_ref is not None:
+        if abs(date_ref - sc[1]) > TOLERANCE_DATE:
+            return False, "date de modification différente de celle connue par Resolve"
+        return True, "nom et date identiques (original hors ligne)"
+    return True, "nom identique seulement (aucune date connue)"
+
+
 @dataclass(frozen=True)
 class Trouve:
     chemin: str
@@ -281,50 +338,47 @@ class Ambigu:
     candidats: Tuple[str, ...]
 
 
-def chercher(chemin: str, rel: Optional[str], racines_ordre: Iterable[str], dispo: Callable[[str], bool],
-             disque: "Disque", index: Index, taille: Optional[int] = None):
-    """Cherche le fichier sur une famille de disques (par ordre de priorité).
-    1) même chemin relatif ; 2) même nom de fichier, départagé par les dossiers parents.
-    Si la taille du fichier actuel est connue (il est lisible), un candidat de taille différente
-    est rejeté : ce n'est pas le même fichier.
-    Retourne Trouve, Ambigu (plusieurs fichiers possibles : on ne touche à rien) ou None."""
-    ordre = [r for r in racines_ordre if dispo(r)]
-    meme = lambda c: taille is None or disque.taille(c) in (None, taille)
-    if rel is not None:
-        for r in ordre:
-            if disque.existe(r + rel) and meme(r + rel):
-                return Trouve(r + rel, r, "même chemin")
+def chercher_ailleurs(chemin: str, racines: "Racines", dispo: Callable[[str], bool], disque: "Disque",
+                      index: Index, date_ref: Optional[float]):
+    """Pour un clip HORS LIGNE qui pointe hors des paires choisies : cherche un fichier de même nom ET de même
+    date dans les dossiers choisis (rapides d'abord, par priorité). Sans date connue, exige en plus un dossier
+    parent distinctif identique. Plusieurs fichiers différents possibles → Ambigu (on ne touche à rien)."""
     nom = os.path.basename(nfc(chemin))
     if _SEQ_PRINTF.search(nom):
         return None
-    cands = [(score_parents(chemin, c), ordre.index(r), c, r) for r in ordre
-             for c in index.candidats(r, premiere_image(nom)) if meme(c)]
+    ordre = [r for r in racines.rapides + racines.lents if dispo(r)]
+    cands = []
+    for prio, r in enumerate(ordre):
+        for c in index.candidats(r, premiere_image(nom)):
+            cible = nfc(os.path.join(os.path.dirname(c), nom))
+            ok, preuve = identique(cible, disque, date_ref)
+            if not ok:
+                continue
+            if date_ref is None and score_parents(chemin, c) == 0:
+                continue
+            cands.append((prio, cible, r, preuve))
     if not cands:
         return None
-    meilleur = max(c[0] for c in cands)
-    if meilleur == 0:
-        # même nom mais aucun dossier distinctif en commun : rien ne prouve que c'est le même fichier
-        return Ambigu(tuple(sorted(c[2] for c in cands))) if len(cands) > 1 else None
+    meilleur = min(c[0] for c in cands)
     haut = [c for c in cands if c[0] == meilleur]
-    prio = min(c[1] for c in haut)
-    haut = [c for c in haut if c[1] == prio]
-    if len(haut) > 1:
-        return Ambigu(tuple(sorted(c[2] for c in haut)))
-    _, _, trouve, racine = haut[0]
-    comment = f"retrouvé par nom ({pluriel(meilleur, 'dossier parent')} identique{'s' if meilleur > 1 else ''})"
-    return Trouve(nfc(os.path.join(os.path.dirname(trouve), nom)), racine, comment)
+    tailles = {disque.stat(c[1]) for c in haut}
+    if len(haut) > 1 and (date_ref is None or len(tailles) > 1):
+        return Ambigu(tuple(sorted(c[1] for c in haut)))
+    _, cible, racine, preuve = sorted(haut)[0]
+    return Trouve(cible, racine, "retrouvé par nom — " + preuve)
 
 
 # --------------------------------------------------------------------------- décision
 
-DEPLACER = "deplacer"          # à reconnecter vers un autre disque
-EN_PLACE = "en_place"          # déjà sur le bon disque
-INTROUVABLE = "introuvable"    # absent de tous les disques choisis
+DEPLACER = "deplacer"          # à reconnecter vers le dossier jumeau
+EN_PLACE = "en_place"          # déjà sur le bon dossier
+INTROUVABLE = "introuvable"    # absent des deux dossiers de la paire
+DIFFERENT = "different"        # un fichier de même nom existe, mais date ou taille différente : on ne touche à rien
 AMBIGU = "ambigu"              # plusieurs fichiers possibles : on ne touche à rien
-A_VERIFIER = "a_verifier"      # introuvable, mais un des disques choisis n'est pas branché
-HORS_RACINES = "hors_racines"  # en ligne, hors des disques choisis : on n'y touche pas
+A_VERIFIER = "a_verifier"      # introuvable, mais un dossier de la paire n'est pas branché
+HORS_RACINES = "hors_racines"  # en ligne, hors des paires choisies : on n'y touche pas
 SANS_FICHIER = "sans_fichier"  # timeline, compound, générateur…
-BLOQUE = "bloque"              # le disque rapide principal n'est pas disponible : on ne décide rien
+BLOQUE = "bloque"              # le dossier rapide principal n'est pas disponible : on ne décide rien
 
 
 @dataclass(frozen=True)
@@ -332,18 +386,20 @@ class Decision:
     statut: str
     cible: str = ""
     racine_cible: str = ""
-    racine_source: str = ""     # "" si le clip pointe hors des disques choisis
+    racine_source: str = ""     # "" si le clip pointe hors des paires choisies
     comment: str = ""
     candidats: Tuple[str, ...] = ()
 
 
 def decider(chemin: str, racines: Racines, etats: Dict[str, "EtatDossier"], disque: "Disque",
-            index: Optional[Index] = None) -> Decision:
-    """La règle (choisie par l'utilisateur) :
-    - un clip relié à un disque RAPIDE où son fichier existe ne bouge pas ;
-    - sinon on cherche le fichier sur les disques rapides (par priorité), puis sur les lents ;
-    - un clip en ligne sur un disque lent passe sur un rapide si le fichier y est ;
-    - garde-fou : si le disque rapide principal n'est pas disponible, on ne propose RIEN."""
+            index: Optional[Index] = None, date_ref: Optional[float] = None) -> Decision:
+    """La règle, par paire « rapide ⇄ archive » :
+    - un clip sur le dossier RAPIDE dont le fichier existe ne bouge pas ;
+    - un clip sur l'ARCHIVE passe sur le rapide si le même fichier (même chemin, nom + date + taille) y est ;
+    - un clip sur le rapide dont le fichier a disparu passe sur l'archive si le même fichier y est ;
+    - jamais d'une paire à une autre : un mariage ne peut pas être relié à un autre tournage ;
+    - un clip hors ligne hors des paires est recherché par nom + date (chercher_ailleurs) ;
+    - garde-fou : si le dossier rapide principal n'est pas disponible, on ne propose RIEN."""
     index = index or Index()
     if not chemin:
         return Decision(SANS_FICHIER)
@@ -353,27 +409,30 @@ def decider(chemin: str, racines: Racines, etats: Dict[str, "EtatDossier"], disq
     if not dispo(racines.principal):
         return Decision(BLOQUE)
     ici = disque.existe(c) if (src is None or dispo(src)) else False
-    taille = disque.taille(c) if ici else None
-    if src is None and ici:
-        return Decision(HORS_RACINES)
-    rel = c[len(src):] if src else None
-    if ici and racines.niveau(src) == RAPIDE:
-        return Decision(EN_PLACE)
-    t = chercher(c, rel, racines.rapides, dispo, disque, index, taille)
-    if isinstance(t, Trouve) and t.chemin != c:
-        return Decision(DEPLACER, t.chemin, t.racine, src or "", t.comment)
-    if ici:  # en ligne sur un disque lent, pas de copie sûre sur un rapide
-        return Decision(EN_PLACE)
-    if isinstance(t, Ambigu):
-        return Decision(AMBIGU, racine_source=src or "", candidats=t.candidats)
-    t = chercher(c, rel, racines.lents, dispo, disque, index, taille)
-    if isinstance(t, Trouve):
-        return Decision(DEPLACER, t.chemin, t.racine, src or "", t.comment)
-    if isinstance(t, Ambigu):
-        return Decision(AMBIGU, racine_source=src or "", candidats=t.candidats)
     if src is None:
+        if ici:
+            return Decision(HORS_RACINES)
+        t = chercher_ailleurs(c, racines, dispo, disque, index, date_ref)
+        if isinstance(t, Trouve):
+            return Decision(DEPLACER, t.chemin, t.racine, "", t.comment)
+        if isinstance(t, Ambigu):
+            return Decision(AMBIGU, candidats=t.candidats)
         return Decision(HORS_RACINES)
-    if not all(dispo(r) for r in racines.toutes):
+    paire = racines.paire_de(src)
+    rel = c[len(src):]
+    jumeau = paire.lent if src == paire.rapide else paire.rapide
+    if src == paire.rapide and ici:
+        return Decision(EN_PLACE)
+    cible = jumeau + rel
+    if dispo(jumeau) and disque.existe(cible):
+        ok, preuve = identique(cible, disque, date_ref, c if ici else None)
+        if ok:
+            return Decision(DEPLACER, cible, jumeau, src, "même chemin — " + preuve)
+        if not ici:
+            return Decision(DIFFERENT, racine_source=src, comment=preuve, candidats=(cible,))
+    if ici:
+        return Decision(EN_PLACE)   # en ligne sur l'archive, pas de copie identique sur le rapide
+    if not dispo(jumeau) or not dispo(src):
         return Decision(A_VERIFIER, racine_source=src)
     return Decision(INTROUVABLE, racine_source=src)
 
@@ -390,6 +449,7 @@ class Clip:
     type: str
     chemin: str
     proxy: str = ""
+    date: Optional[float] = None   # date de modification du fichier, telle que Resolve la connaît
 
 
 @dataclass(frozen=True)
@@ -421,6 +481,7 @@ class Plan:
     actions: List[Action] = field(default_factory=list)
     introuvables: List[Tuple[Clip, str]] = field(default_factory=list)              # (clip, genre)
     ambigus: List[Tuple[Clip, str, Tuple[str, ...]]] = field(default_factory=list)  # (clip, genre, candidats)
+    differents: List[Tuple[Clip, str, str, str]] = field(default_factory=list)        # (clip, genre, fichier, motif)
     a_verifier: List[Clip] = field(default_factory=list)
     sous_titres: List[Clip] = field(default_factory=list)
     hors_racines: Dict[str, List[int]] = field(default_factory=dict)                 # volume → [total, hors ligne]
@@ -444,7 +505,7 @@ class Plan:
     @property
     def nb_a_verifier(self) -> int:
         """Ce qui demande vraiment l'attention."""
-        return (len(self.introuvables) + len(self.ambigus) + len(self.a_verifier) + len(self.sous_titres)
+        return (len(self.introuvables) + len(self.ambigus) + len(self.differents) + len(self.a_verifier) + len(self.sous_titres)
                 + sum(h for _, h in self.hors_racines.values()))
 
     def medias(self) -> List[Action]:
@@ -510,7 +571,7 @@ def construire_plan(clips: Iterable[Clip], racines: Racines, etats: Dict[str, "E
 
     for clip in clips:
         plan.nb_clips += 1
-        d = decider(clip.chemin, racines, etats, disque, index)
+        d = decider(clip.chemin, racines, etats, disque, index, clip.date)
         if d.statut == SANS_FICHIER:
             plan.sans_fichier += 1
         elif d.statut == HORS_RACINES:
@@ -524,6 +585,8 @@ def construire_plan(clips: Iterable[Clip], racines: Racines, etats: Dict[str, "E
             plan.introuvables.append((clip, "media"))
         elif d.statut == AMBIGU:
             plan.ambigus.append((clip, "media", d.candidats))
+        elif d.statut == DIFFERENT:
+            plan.differents.append((clip, "media", d.candidats[0], d.comment))
         elif d.statut == A_VERIFIER:
             plan.a_verifier.append(clip)
         elif d.statut == DEPLACER:
@@ -539,6 +602,8 @@ def construire_plan(clips: Iterable[Clip], racines: Racines, etats: Dict[str, "E
                 plan.introuvables.append((clip, "proxy"))
             elif p.statut == AMBIGU:
                 plan.ambigus.append((clip, "proxy", p.candidats))
+            elif p.statut == DIFFERENT:
+                plan.differents.append((clip, "proxy", p.candidats[0], p.comment))
     # doublons : plusieurs clips (uid différents) sur le même fichier
     par_fichier: Dict[Tuple[str, str], int] = defaultdict(int)
     for a in brutes:
@@ -616,6 +681,19 @@ def verifier(actions: List[Action], avant: Instantane, apres: Instantane,
 # --------------------------------------------------------------------------- textes
 
 
+def lire_date_resolve(texte: Optional[str]) -> Optional[float]:
+    """« Fri Aug  7 15:58:29 2026 » (Date Modified de Resolve) → horodatage ; None si absente ou illisible.
+    Vérifié sur 9 057 clips : égale à la date de modification du fichier (±2 s) dans 9 056 cas."""
+    import datetime as _dt
+    t = " ".join((texte or "").split())
+    for f in ("%a %b %d %H:%M:%S %Y", "%a %b %d %Y %H:%M:%S"):
+        try:
+            return _dt.datetime.strptime(t, f).timestamp()
+        except ValueError:
+            pass
+    return None
+
+
 def nombre(n: int) -> str:
     """7518 → « 7 518 » (espace fine insécable)."""
     return f"{n:,}".replace(",", " ")
@@ -658,7 +736,7 @@ def bilan_directions(racines: Racines, actions: List[Action]) -> List[str]:
 
 def resume_plan(plan: Plan, selection=None) -> str:
     if plan.bloque:
-        return (f"Le disque rapide principal ({plan.racines.nom(plan.racines.principal)}) n'est pas disponible "
+        return (f"Le dossier rapide principal ({plan.racines.nom(plan.racines.principal)}) n'est pas disponible "
                 f"({plan.raison(plan.racines.principal)}). Rien n'est proposé.")
     actions = plan.actions_choisies(selection)
     doublons = sum(1 for a in actions if a.genre == "media" and a.doublon)
@@ -672,6 +750,8 @@ def resume_plan(plan: Plan, selection=None) -> str:
         morceaux.append("non branché(s) : " + ", ".join(plan.racines.nom(r) for r in plan.absents))
     if plan.a_verifier:
         morceaux.append(f"{pluriel(len(plan.a_verifier), 'clip')} introuvable(s) pour l'instant (disque débranché)")
+    if plan.differents:
+        morceaux.append(f"{pluriel(len(plan.differents), 'fichier')} de même nom mais pas identique(s) (non touchés)")
     if plan.ambigus:
         morceaux.append(f"{pluriel(len(plan.ambigus), 'clip')} avec plusieurs fichiers possibles (non touchés)")
     if plan.introuvables:
@@ -729,6 +809,8 @@ def lignes_rapport(plan: Plan, resultat: Optional[Resultat] = None, limite: int 
                 [f"{os.path.basename(av)} : {av} → {ap}" for _, av, ap in resultat.non_prevus])
         if resultat.enregistre is not None:
             L += ["Projet enregistré." if resultat.enregistre else "⚠ Projet NON enregistré : fais Cmd+S.", ""]
+    section("Même nom mais PAS le même fichier — date ou taille différente (non touchés) :",
+            [f"{c.nom} [{genre}] — {motif} : {f}" for c, genre, f, motif in plan.differents])
     section("Plusieurs fichiers possibles (non touchés, à relier à la main) :",
             [f"{c.nom} [{genre}] — {len(cands)} candidats : " + " | ".join(cands[:3]) for c, genre, cands in plan.ambigus])
     section("Introuvables sur tous les disques choisis :",

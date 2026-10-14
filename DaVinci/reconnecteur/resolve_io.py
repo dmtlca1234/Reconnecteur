@@ -55,20 +55,20 @@ def chutiers(projet) -> Iterator[Tuple[object, str]]:
             pile.append((sous, f"{nom}/{sous.GetName()}"))
 
 
-def _props(clip) -> Tuple[str, str, str, str]:
-    """(chemin, proxy, type, nom). Forme canonique GetClipProperty() (dict) ; la forme par clé est
-    dépréciée depuis Resolve 21.1."""
+def _props(clip) -> Tuple[str, str, str, str, Optional[float]]:
+    """(chemin, proxy, type, nom, date de modification connue par Resolve).
+    Forme canonique GetClipProperty() (dict) ; la forme par clé est dépréciée depuis Resolve 21.1."""
     d = clip.GetClipProperty() or {}
     return (d.get("File Path") or "", d.get("Proxy Media Path") or "",
-            d.get("Type") or "", d.get("Clip Name") or "")
+            d.get("Type") or "", d.get("Clip Name") or "", regles.lire_date_resolve(d.get("Date Modified")))
 
 
 def lire_clips(projet, progression: Progression = _rien) -> List[Clip]:
     clips: List[Clip] = []
     for dossier, nom_chutier in chutiers(projet):
         for c in dossier.GetClipList() or []:
-            chemin, proxy, type_, nom = _props(c)
-            clips.append(Clip(c.GetUniqueId(), nom_chutier, nom, type_, chemin, proxy))
+            chemin, proxy, type_, nom, date = _props(c)
+            clips.append(Clip(c.GetUniqueId(), nom_chutier, nom, type_, chemin, proxy, date))
             if len(clips) % 250 == 0:
                 progression(f"Lecture du média pool… {regles.nombre(len(clips))} clips")
     return clips
@@ -78,7 +78,7 @@ def instantane(projet, progression: Progression = _rien) -> Instantane:
     etat: Instantane = {}
     for dossier, _ in chutiers(projet):
         for c in dossier.GetClipList() or []:
-            chemin, proxy, _, _ = _props(c)
+            chemin, proxy = _props(c)[:2]
             etat[c.GetUniqueId()] = (chemin, proxy)
             if len(etat) % 500 == 0:
                 progression(f"Vérification… {regles.nombre(len(etat))} clips relus")
@@ -103,7 +103,7 @@ def appliquer(projet, actions: List[Action], progression: Progression = _rien) -
             uid = c.GetUniqueId()
             if uid not in medias and uid not in proxys:
                 continue
-            chemin, proxy, _, _ = _props(c)
+            chemin, proxy = _props(c)[:2]
             a = medias.get(uid)
             if a is not None:
                 if nfc(chemin) != nfc(a.ancien):

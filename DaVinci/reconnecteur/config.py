@@ -2,7 +2,7 @@
 
 Tout est rangé dans ~/Library/Application Support/Reconnecteur/ (modifiable par la variable
 d'environnement RECONNECTEUR_DOSSIER, utilisée par les tests) :
-  config.json      les disques choisis (rapides par priorité, lents) et les options
+  config.json      les paires « dossier rapide ⇄ archive » (par priorité) et les options
   Journal.md       une entrée par reconnexion (lisible par un humain)
   Sauvegardes/     copies .drp du projet faites avant chaque reconnexion (toutes conservées :
                    le Reconnecteur n'efface JAMAIS aucun fichier)
@@ -27,7 +27,7 @@ SAUVEGARDES = os.path.join(DOSSIER, "Sauvegardes")
 ERREURS = os.path.join(DOSSIER, "erreurs.log")
 VERROU = os.path.join(DOSSIER, ".verrou")
 
-DEFAUTS = {"rapides": [], "lents": [], "sauvegarde_avant": True}
+DEFAUTS = {"paires": [], "sauvegarde_avant": True}
 
 
 def charger() -> dict:
@@ -36,14 +36,14 @@ def charger() -> dict:
             donnees = json.load(f)
     except (OSError, ValueError):
         return {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAUTS.items()}
-    # version 1.0 : un seul « rapide » et un seul « lent »
-    if "rapides" not in donnees and donnees.get("rapide"):
-        donnees["rapides"] = [donnees["rapide"]]
-    if "lents" not in donnees and donnees.get("lent"):
-        donnees["lents"] = [donnees["lent"]]
+    # anciennes versions : 1.0 (« rapide » / « lent »), 1.1 (listes « rapides » / « lents ») → paires dans l'ordre
+    if "paires" not in donnees:
+        rapides = donnees.get("rapides") or ([donnees["rapide"]] if donnees.get("rapide") else [])
+        lents = donnees.get("lents") or ([donnees["lent"]] if donnees.get("lent") else [])
+        donnees["paires"] = [{"rapide": r, "lent": l} for r, l in zip(rapides, lents)]
     r = {k: donnees.get(k, v) for k, v in DEFAUTS.items()}
-    r["rapides"] = [x for x in r["rapides"] if isinstance(x, str) and x]
-    r["lents"] = [x for x in r["lents"] if isinstance(x, str) and x]
+    r["paires"] = [{"rapide": p["rapide"], "lent": p["lent"]} for p in r["paires"]
+                   if isinstance(p, dict) and p.get("rapide") and p.get("lent")]
     return r
 
 

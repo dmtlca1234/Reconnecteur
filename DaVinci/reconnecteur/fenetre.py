@@ -1,7 +1,7 @@
 """Fenêtre du Reconnecteur (Fusion UI Manager, s'affiche dans DaVinci Resolve).
 
-Disposition inspirée de FreeFileSync : les disques rapides à gauche (par ordre de priorité), les
-disques lents à droite ; pour chaque tournage, le disque d'origine, une flèche et le disque cible ;
+Disposition inspirée de FreeFileSync : des paires « dossier rapide ⇄ archive » (par priorité) ;
+pour chaque tournage, le dossier d'origine, une flèche et le dossier cible ;
 des filtres et une barre de bilan en bas.
 
 Le Reconnecteur ne copie, ne déplace et n'efface AUCUN fichier : il ne change que les liens dans Resolve."""
@@ -54,33 +54,32 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
             return
     disp = _dispatcher(ui, bmd)
     reglages = config.charger()
-    disques = {RAPIDE: list(reglages["rapides"]), LENT: list(reglages["lents"])}
+    paires = [dict(p) for p in reglages["paires"]]   # [{"rapide": …, "lent": …}] par priorité
 
-    def panneau(niveau, titre, aide):
-        """Un côté, comme les deux panneaux de FreeFileSync, avec sa liste de disques."""
-        boutons = [ui.Button({"ID": f"ajouter_{niveau}", "Text": "+ Ajouter…", "Weight": 0}),
-                   ui.Button({"ID": f"retirer_{niveau}", "Text": "Retirer", "Weight": 0})]
-        if niveau == RAPIDE:
-            boutons.append(ui.Button({"ID": "monter", "Text": "▲ Priorité", "Weight": 0}))
-        return ui.VGroup({"Weight": 1}, [
-            ui.Label({"Text": titre, "Weight": 0, "StyleSheet": "font-size: 14px; font-weight: bold;"}),
-            ui.Label({"Text": aide, "Weight": 0, "WordWrap": True, "StyleSheet": f"color: {GRIS};"}),
-            ui.Tree({"ID": f"disques_{niveau}", "Weight": 0, "MinimumSize": [200, 96], "MaximumSize": [16000, 120],
+    def panneau_paires():
+        """Les paires « dossier rapide ⇄ archive », comme les paires de dossiers de FreeFileSync."""
+        return ui.VGroup({"Weight": 0}, [
+            ui.Label({"Text": "PAIRES DE DOSSIERS   ⚡ rapide  ⇄  🐢 archive", "Weight": 0,
+                      "StyleSheet": "font-size: 14px; font-weight: bold;"}),
+            ui.Label({"Weight": 0, "WordWrap": True, "StyleSheet": f"color: {GRIS};",
+                      "Text": "Chaque dossier rapide a son archive, rangée pareil. Un clip ne passe que d'un dossier à "
+                              "son jumeau, au même chemin, et seulement si c'est le même fichier (nom, date, taille). "
+                              "La 1re paire est la principale."}),
+            ui.Tree({"ID": "paires", "Weight": 0, "MinimumSize": [200, 90], "MaximumSize": [16000, 130],
                      "RootIsDecorated": False, "AlternatingRowColors": True}),
-            ui.HGroup({"Weight": 0}, boutons + [ui.HGap()]),
+            ui.HGroup({"Weight": 0}, [
+                ui.Button({"ID": "ajouter_paire", "Text": "+ Ajouter une paire…", "Weight": 0}),
+                ui.Button({"ID": "retirer_paire", "Text": "Retirer", "Weight": 0}),
+                ui.Button({"ID": "monter", "Text": "▲ Priorité", "Weight": 0}),
+                ui.HGap(),
+            ]),
         ])
 
     win = disp.AddWindow(
         {"ID": ID_FENETRE, "WindowTitle": f"Reconnecteur {VERSION}", "Geometry": [120, 80, 1160, 780]},
         ui.VGroup({"Spacing": 8}, [
             ui.Label({"ID": "titre", "Text": "", "Weight": 0, "StyleSheet": "font-size: 15px;"}),
-            ui.HGroup({"Weight": 0, "Spacing": 12}, [
-                panneau(RAPIDE, "⚡  DISQUES RAPIDES", "Utilisés en priorité, dans cet ordre. Un clip déjà relié "
-                                                    "à un disque rapide où son fichier existe ne bouge pas."),
-                ui.Label({"Text": "⇄", "Weight": 0, "StyleSheet": "font-size: 26px; padding: 0 8px;"}),
-                panneau(LENT, "🐢  DISQUES LENTS (archives)", "Utilisés seulement si le fichier n'est sur "
-                                                            "aucun disque rapide."),
-            ]),
+            panneau_paires(),
             ui.HGroup({"Weight": 0}, [
                 ui.Label({"Text": "Afficher :", "Weight": 0}),
                 ui.CheckBox({"ID": "voir_rapide", "Text": "⚡ vers un disque rapide", "Checked": True, "Weight": 0}),
@@ -118,15 +117,14 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
             arbre.ColumnWidth[col] = largeur
         except Exception:
             pass
-    for niveau in (RAPIDE, LENT):
-        t = it[f"disques_{niveau}"]
-        t.ColumnCount = 3
-        t.SetHeaderLabels(["Disque", "Dossier", "État"])
-        for col, largeur in enumerate((150, 230, 150)):
-            try:
-                t.ColumnWidth[col] = largeur
-            except Exception:
-                pass
+    tp = it["paires"]
+    tp.ColumnCount = 6
+    tp.SetHeaderLabels(["#", "⚡ Dossier rapide", "État", "", "🐢 Archive (jumeau)", "État"])
+    for col, largeur in enumerate((30, 360, 120, 30, 360, 120)):
+        try:
+            tp.ColumnWidth[col] = largeur
+        except Exception:
+            pass
 
     etat: Dict = {"plan": None, "items": {}, "coches": {}, "confirmer": False, "projet": None, "resultat": None}
 
@@ -144,35 +142,37 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
         return enveloppe
 
     def racines():
-        return Racines.depuis(disques[RAPIDE], disques[LENT])
+        return Racines.depuis(paires)
 
-    def remplir_disques():
+    def remplir_paires():
         r = racines()
-        for niveau in (RAPIDE, LENT):
-            t = it[f"disques_{niveau}"]
-            t.Clear()
-            for i, chemin in enumerate(disques[niveau], 1):
-                racine = regles.racine_normalisee(chemin)
-                e = regles.etat_dossier(racine)
-                item = t.NewItem()
-                item.Text[0] = (f"{i}. " if niveau == RAPIDE else "") + r.nom(racine)
-                item.Text[1] = racine
-                item.Text[2] = "●  disponible" if e.disponible else "○  " + e.raison
-                t.AddTopLevelItem(item)
+        tp.Clear()
 
-    def disque_selectionne(niveau):
-        item = it[f"disques_{niveau}"].CurrentItem()
+        def decrire(chemin):
+            racine = regles.racine_normalisee(chemin)
+            e = regles.etat_dossier(racine)
+            return f"{r.nom(racine)}   ({racine})", ("●  disponible" if e.disponible else "○  " + e.raison)
+
+        for i, p in enumerate(paires, 1):
+            item = tp.NewItem()
+            item.Text[0] = str(i)
+            item.Text[1], item.Text[2] = decrire(p["rapide"])
+            item.Text[3] = "⇄"
+            item.Text[4], item.Text[5] = decrire(p["lent"])
+            tp.AddTopLevelItem(item)
+
+    def paire_selectionnee():
+        item = tp.CurrentItem()
         if not item:
             return None
-        chemin = item.Text[1]
-        for i, c in enumerate(disques[niveau]):
-            if regles.racine_normalisee(c) == chemin:
-                return i
-        return None
+        try:
+            i = int(item.Text[0]) - 1
+        except (TypeError, ValueError):
+            return None
+        return i if 0 <= i < len(paires) else None
 
-    def enregistrer_disques():
-        reglages.update(rapides=list(disques[RAPIDE]), lents=list(disques[LENT]),
-                        sauvegarde_avant=bool(it["sauvegarde"].Checked))
+    def enregistrer_paires():
+        reglages.update(paires=[dict(p) for p in paires], sauvegarde_avant=bool(it["sauvegarde"].Checked))
         config.enregistrer(reglages)
 
     def annuler_confirmation():
@@ -279,14 +279,16 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
 
         info("⚠  Plusieurs fichiers possibles (non touchés)",
              [f"{c.nom} ({genre}) — {len(cands)} candidats : {' | '.join(cands[:2])}" for c, genre, cands in plan.ambigus])
-        info("⚠  Introuvables sur tous les disques choisis",
+        info("⚠  Même nom mais PAS le même fichier — date ou taille différente (non touchés)",
+             [f"{c.nom} ({genre}) — {motif}" for c, genre, f, motif in plan.differents])
+        info("⚠  Introuvables dans leur paire",
              [f"{c.nom}  ({genre})  {c.proxy if genre == 'proxy' else c.chemin}" for c, genre in plan.introuvables])
         if plan.a_verifier:
             absents = ", ".join(plan.racines.nom(r) for r in plan.absents)
             info(f"ⓘ  Introuvables pour l'instant — à revoir quand {absents} sera branché",
                  [f"{c.nom}  {c.chemin}" for c in plan.a_verifier])
         info("ⓘ  Sous-titres (Resolve ne permet pas de les reconnecter)", [f"{c.nom}  {c.chemin}" for c in plan.sous_titres])
-        info("ⓘ  Hors des disques choisis (non traités)",
+        info("ⓘ  Hors des paires choisies (non traités)",
              [f"{regles.nom_volume(vol, plan.racines)} : {regles.pluriel(t, 'clip')}, dont {regles.nombre(h)} hors ligne"
               for vol, (t, h) in sorted(plan.hors_racines.items())])
 
@@ -321,18 +323,18 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
     @protege
     def analyser(ev):
         annuler_confirmation()
-        remplir_disques()
+        remplir_paires()
         it["reconnecter"].Enabled = False
         etat["resultat"] = None
         r = racines()
-        if not r.rapides:
-            dire("Ajoute au moins un disque rapide (à gauche) avec « + Ajouter… », et tes disques d'archives à droite.")
+        if not r.paires:
+            dire("Ajoute au moins une paire avec « + Ajouter une paire… » : ton dossier rapide, puis son archive.")
             return
         probleme = r.probleme()
         if probleme:
             dire("⚠ " + probleme, ORANGE)
             return
-        enregistrer_disques()
+        enregistrer_paires()
         it["analyser"].Enabled = False
         projet = resolve_io.projet_courant(resolve)
         etat["projet"] = projet
@@ -375,7 +377,7 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
             dire("⚠ Le projet ouvert a changé depuis l'analyse. Relance l'analyse.", ORANGE)
             it["analyser"].Enabled = True
             return
-        enregistrer_disques()
+        enregistrer_paires()
         r = moteur.reconnecter(resolve, projet, plan, choix, reglages["sauvegarde_avant"], dire)
         etat["resultat"] = r
         ok_journal, err_journal = moteur.journaliser(projet.GetName(), plan, r)
@@ -400,49 +402,49 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
 
     @protege
     def ajouter(ev):
-        niveau = RAPIDE if ev["who"] == "ajouter_rapide" else LENT
-        chemin = _choisir_dossier(fusion, "/Volumes/")
-        if not chemin:
+        dire("1/2 — Choisis le dossier RAPIDE (SSD)…")
+        rapide = _choisir_dossier(fusion, "/Volumes/")
+        if not rapide:
+            dire("Ajout annulé.")
             return
-        racine = regles.racine_normalisee(chemin)
-        if any(regles.racine_normalisee(c) == racine for c in disques[RAPIDE] + disques[LENT]):
-            dire("Ce dossier est déjà dans la liste.", ORANGE)
+        dire(f"2/2 — Choisis l'ARCHIVE jumelle de « {rapide} » (rangée pareil)…")
+        lent = _choisir_dossier(fusion, "/Volumes/")
+        if not lent:
+            dire("Ajout annulé.")
             return
-        disques[niveau].append(racine)
-        plan_perime()
-        remplir_disques()
+        paires.append({"rapide": regles.racine_normalisee(rapide), "lent": regles.racine_normalisee(lent)})
         probleme = racines().probleme()
         if probleme:
-            disques[niveau].remove(racine)
-            remplir_disques()
+            paires.pop()
             dire("⚠ " + probleme, ORANGE)
             return
-        enregistrer_disques()
+        plan_perime()
+        remplir_paires()
+        enregistrer_paires()
         analyser(ev)
 
     @protege
     def retirer(ev):
-        niveau = RAPIDE if ev["who"] == "retirer_rapide" else LENT
-        i = disque_selectionne(niveau)
+        i = paire_selectionnee()
         if i is None:
-            dire("Clique d'abord sur un disque de la liste, puis sur « Retirer ».", ORANGE)
+            dire("Clique d'abord sur une paire de la liste, puis sur « Retirer ».", ORANGE)
             return
-        disques[niveau].pop(i)
+        paires.pop(i)
         plan_perime()
-        remplir_disques()
-        enregistrer_disques()
-        dire("Disque retiré de la liste (rien n'est effacé sur le disque). Clique sur Analyser.")
+        remplir_paires()
+        enregistrer_paires()
+        dire("Paire retirée de la liste (rien n'est effacé sur les disques). Clique sur Analyser.")
 
     @protege
     def monter(ev):
-        i = disque_selectionne(RAPIDE)
+        i = paire_selectionnee()
         if i is None or i == 0:
-            dire("Clique sur un disque rapide (pas le premier), puis sur « ▲ Priorité ».", ORANGE)
+            dire("Clique sur une paire (pas la première), puis sur « ▲ Priorité ».", ORANGE)
             return
-        disques[RAPIDE][i - 1], disques[RAPIDE][i] = disques[RAPIDE][i], disques[RAPIDE][i - 1]
+        paires[i - 1], paires[i] = paires[i], paires[i - 1]
         plan_perime()
-        remplir_disques()
-        enregistrer_disques()
+        remplir_paires()
+        enregistrer_paires()
         dire("Priorité changée. Clique sur Analyser.")
 
     @protege
@@ -477,10 +479,8 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
 
     win.On.analyser.Clicked = analyser
     win.On.reconnecter.Clicked = reconnecter
-    win.On.ajouter_rapide.Clicked = ajouter
-    win.On.ajouter_lent.Clicked = ajouter
-    win.On.retirer_rapide.Clicked = retirer
-    win.On.retirer_lent.Clicked = retirer
+    win.On.ajouter_paire.Clicked = ajouter
+    win.On.retirer_paire.Clicked = retirer
     win.On.monter.Clicked = monter
     win.On.voir_rapide.Clicked = filtre
     win.On.voir_lent.Clicked = filtre
@@ -498,12 +498,12 @@ def ouvrir(resolve=None, fusion=None, bmd=None) -> None:
         it["titre"].Text = f"<b>Projet :</b> {projet.GetName()}"
     except RuntimeError as e:
         it["titre"].Text = f"<b>⚠ {e}</b>"
-    remplir_disques()
+    remplir_paires()
     win.Show()
-    if disques[RAPIDE]:
+    if paires:
         ui.QueueEvent(it["analyser"], "Clicked", {})  # analyse automatique à l'ouverture
     else:
-        dire("Bienvenue ! Ajoute tes disques rapides à gauche et tes disques d'archives à droite avec « + Ajouter… ».")
+        dire("Bienvenue ! Ajoute une paire avec « + Ajouter une paire… » : ton dossier rapide (SSD), puis son archive.")
     disp.RunLoop()
     # Hide() est sans effet depuis un script externe (vérifié sur Resolve 21.1) : Visible = False fonctionne.
     win.Visible = False
